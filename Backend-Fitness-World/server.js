@@ -1,8 +1,25 @@
-const app = require("./app");
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const connectDB = require("./db");
 
-// ℹ️ Sets the PORT for our app to have access to it. If no env has been set, we hard code it to 5005
+const app = express();
 const PORT = process.env.PORT || 5005;
 
+app.use(express.json());
+app.use(
+  cors({
+    origin: ["http://localhost:5173"], // add your prod URL later
+    credentials: true,
+  })
+);
+
+connectDB();
+
+app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+app.use("/api/users", require("./routes/users.routes"));
+
 app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+  console.log(`✅ Server running on http://localhost:${PORT}`);
 });
