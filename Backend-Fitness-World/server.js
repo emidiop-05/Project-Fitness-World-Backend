@@ -13,6 +13,8 @@ app.use(
     credentials: true,
   })
 );
+app.use("/api/protected", require("./routes/protected.routes"));
+
 app.use("/api/auth", require("./routes/auth.routes"));
 connectDB();
 
