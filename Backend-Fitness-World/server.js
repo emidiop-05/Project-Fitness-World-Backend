@@ -13,7 +13,7 @@ app.use(
     credentials: true,
   })
 );
-
+app.use("/api/auth", require("./routes/auth.routes"));
 connectDB();
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
