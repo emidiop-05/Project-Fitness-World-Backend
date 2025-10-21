@@ -4,8 +4,8 @@ const router = express.Router();
 
 router.post("/", async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const user = await User.create({ email, password });
+    const { email, password, birthday, gender } = req.body;
+    const user = await User.create({ email, password, birthday, gender });
     res.status(201).json(user);
   } catch (err) {
     if (err.code === 11000) {
