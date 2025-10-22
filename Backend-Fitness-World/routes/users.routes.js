@@ -4,9 +4,43 @@ const router = express.Router();
 
 router.post("/", async (req, res) => {
   try {
-    const { email, password, birthday, gender } = req.body;
-    const user = await User.create({ email, password, birthday, gender });
-    res.status(201).json(user);
+    const {
+      profileImage,
+      email,
+      password,
+      birthday,
+      gender,
+      firstName,
+      lastName,
+      nickName,
+      countryCode,
+    } = req.body;
+
+    const user = await User.create({
+      profileImage,
+      email,
+      password,
+      birthday,
+      gender,
+      firstName,
+      lastName,
+      nickName,
+      countryCode,
+    });
+
+    const { _id, createdAt } = user;
+    res.status(201).json({
+      _id,
+      email,
+      birthday,
+      gender,
+      firstName,
+      lastName,
+      nickName,
+      countryCode,
+      profileImage: user.profileImage,
+      createdAt,
+    });
   } catch (err) {
     if (err.code === 11000) {
       return res.status(409).json({ error: "Email already exists" });
@@ -16,7 +50,7 @@ router.post("/", async (req, res) => {
 });
 
 router.get("/", async (_req, res) => {
-  const users = await User.find().lean();
+  const users = await User.find().select("-password").lean();
   res.json(users);
 });
 

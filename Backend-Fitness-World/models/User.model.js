@@ -6,6 +6,14 @@ countries.registerLocale(require("i18n-iso-countries/langs/en.json"));
 
 const userSchema = new Schema(
   {
+    profileImage: {
+      type: String,
+      required: false,
+      default: "https://via.placeholder.com/150",
+    },
+    firstName: { type: String, required: true },
+    lastName: { type: String, required: true },
+    nickName: { type: String, required: true },
     email: {
       type: String,
       required: true,

@@ -21,10 +21,32 @@ router.post("/login", async (req, res) => {
     const payload = { sub: user._id, email: user.email };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
-    const { _id, birthday, gender, countryCode, createdAt } = user;
+    const {
+      _id,
+      firstName,
+      lastName,
+      nickName,
+      birthday,
+      gender,
+      countryCode,
+      profileImage, // <-- include
+      createdAt,
+    } = user;
+
     res.json({
       token,
-      user: { _id, email, birthday, gender, countryCode, createdAt },
+      user: {
+        _id,
+        email,
+        firstName,
+        lastName,
+        nickName,
+        birthday,
+        gender,
+        countryCode,
+        profileImage, // <-- include
+        createdAt,
+      },
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
