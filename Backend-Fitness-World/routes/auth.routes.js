@@ -29,7 +29,7 @@ router.post("/login", async (req, res) => {
       birthday,
       gender,
       countryCode,
-      profileImage, // <-- include
+      profileImage,
       createdAt,
     } = user;
 
@@ -44,7 +44,7 @@ router.post("/login", async (req, res) => {
         birthday,
         gender,
         countryCode,
-        profileImage, // <-- include
+        profileImage,
         createdAt,
       },
     });

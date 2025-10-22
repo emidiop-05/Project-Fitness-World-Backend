@@ -33,6 +33,8 @@ app.use("/api/protected", require("./routes/protected.routes"));
 app.use("/api/auth", require("./routes/auth.routes"));
 app.use("/api/users", require("./routes/users.routes"));
 app.use("/api/uploads", require("./routes/uploads.routes"));
+app.use("/api/exercises", require("./routes/exercises.routes"));
+
 connectDB();
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
@@ -45,5 +47,5 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+  console.log(`Server running on http://localhost:${PORT}`);
 });
