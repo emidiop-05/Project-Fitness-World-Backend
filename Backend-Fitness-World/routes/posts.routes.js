@@ -1,11 +1,26 @@
 const express = require("express");
 const slugify = require("slugify");
+const jwt = require("jsonwebtoken");
 const Post = require("../models/Post.model");
 const Comment = require("../models/Comment.model");
 const Like = require("../models/Like.model");
 const requireAuth = require("../middleware/requireAuth");
 
 const router = express.Router();
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+
+/** Helper: try to read userId from Authorization header without forcing auth */
+function getOptionalUserId(req) {
+  const auth = req.headers.authorization || "";
+  const [scheme, token] = auth.split(" ");
+  if (scheme !== "Bearer" || !token) return null;
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    return payload?.sub || null;
+  } catch {
+    return null;
+  }
+}
 
 router.get("/", async (req, res) => {
   try {
@@ -26,23 +41,50 @@ router.get("/", async (req, res) => {
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
-        .populate("author", "firstName lastName nickName profileImage"),
+        .populate("author", "firstName lastName nickName profileImage")
+        .lean(),
       Post.countDocuments(filter),
     ]);
 
+    // Mark likedByMe when user is logged in
+    const userId = getOptionalUserId(req);
+    if (userId && posts.length) {
+      const postIds = posts.map((p) => p._id);
+      const liked = await Like.find({ post: { $in: postIds }, user: userId })
+        .select("post")
+        .lean();
+      const likedSet = new Set(liked.map((l) => String(l.post)));
+      posts.forEach((p) => {
+        p.likedByMe = likedSet.has(String(p._id));
+      });
+    }
+
     res.json({ page, limit, total, posts });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Failed to list posts" });
   }
 });
 
 router.get("/:slug", async (req, res) => {
-  const post = await Post.findOne({ slug: req.params.slug }).populate(
-    "author",
-    "firstName lastName nickName profileImage"
-  );
-  if (!post) return res.status(404).json({ error: "Post not found" });
-  res.json(post);
+  try {
+    const post = await Post.findOne({ slug: req.params.slug })
+      .populate("author", "firstName lastName nickName profileImage")
+      .lean();
+    if (!post) return res.status(404).json({ error: "Post not found" });
+
+    // Mark likedByMe for single post too
+    const userId = getOptionalUserId(req);
+    if (userId) {
+      const liked = await Like.exists({ post: post._id, user: userId });
+      post.likedByMe = !!liked;
+    }
+
+    res.json(post);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to get post" });
+  }
 });
 
 router.post("/", requireAuth, async (req, res) => {
@@ -126,16 +168,26 @@ router.delete("/:id", requireAuth, async (req, res) => {
   }
 });
 
+// Like toggle — now returns likesCount as well
 router.post("/:postId/like", requireAuth, async (req, res) => {
   const { postId } = req.params;
   try {
+    // Try to like
     await Like.create({ post: postId, user: req.user.sub });
-    await Post.findByIdAndUpdate(postId, { $inc: { likesCount: 1 } });
-    return res.json({ liked: true });
+    const updated = await Post.findByIdAndUpdate(
+      postId,
+      { $inc: { likesCount: 1 } },
+      { new: true }
+    ).select("likesCount");
+    return res.json({ liked: true, likesCount: updated?.likesCount ?? 0 });
   } catch (e) {
     await Like.findOneAndDelete({ post: postId, user: req.user.sub });
-    await Post.findByIdAndUpdate(postId, { $inc: { likesCount: -1 } });
-    return res.json({ liked: false });
+    const updated = await Post.findByIdAndUpdate(
+      postId,
+      { $inc: { likesCount: -1 } },
+      { new: true }
+    ).select("likesCount");
+    return res.json({ liked: false, likesCount: updated?.likesCount ?? 0 });
   }
 });
 
