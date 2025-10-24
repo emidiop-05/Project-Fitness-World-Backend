@@ -11,20 +11,31 @@ const PORT = process.env.PORT || 5005;
 
 app.set("trust proxy", 1);
 
-const FRONTENDS = ["http://localhost:5173", process.env.FRONTEND_URL].filter(
+const allowlist = ["http://localhost:5173", process.env.FRONTEND_URL].filter(
   Boolean
 );
+
+const netlifyRegex = /^https:\/\/([a-z0-9-]+)\.netlify\.app$/i;
 
 app.use(express.json());
 
 app.use(
   cors({
-    origin: FRONTENDS,
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+
+      const allowed = allowlist.includes(origin) || netlifyRegex.test(origin);
+
+      if (allowed) return cb(null, true);
+      console.warn("❌ Blocked by CORS:", origin);
+      return cb(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
   })
 );
+
 app.options("*", cors());
 
 app.use(morgan("dev"));
