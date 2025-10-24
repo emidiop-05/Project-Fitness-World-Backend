@@ -4,14 +4,16 @@ const cors = require("cors");
 const morgan = require("morgan");
 const connectDB = require("./db");
 const path = require("path");
+const fs = require("fs");
 
 const app = express();
 const PORT = process.env.PORT || 5005;
 
-const FRONTENDS = [
-  "http://localhost:5173",
-  process.env.FRONTEND_URL, // e.g., https://your-frontend.netlify.app
-].filter(Boolean);
+app.set("trust proxy", 1);
+
+const FRONTENDS = ["http://localhost:5173", process.env.FRONTEND_URL].filter(
+  Boolean
+);
 
 app.use(express.json());
 
@@ -27,7 +29,11 @@ app.options("*", cors());
 
 app.use(morgan("dev"));
 
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+const UPLOADS_ROOT = path.join(__dirname, "uploads");
+const AVATARS_DIR = path.join(UPLOADS_ROOT, "avatars");
+fs.mkdirSync(AVATARS_DIR, { recursive: true });
+
+app.use("/uploads", express.static(UPLOADS_ROOT, {}));
 
 app.use("/api/protected", require("./routes/protected.routes"));
 app.use("/api/auth", require("./routes/auth.routes"));
