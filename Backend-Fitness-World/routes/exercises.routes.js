@@ -1,9 +1,12 @@
+// routes/exercises.routes.js
 const express = require("express");
 const router = express.Router();
 
 const BASE = "https://exercisedb.p.rapidapi.com";
 
-// === Config ===
+/* =========================
+   Config
+   ========================= */
 function headers() {
   if (!process.env.RAPIDAPI_KEY) throw new Error("Missing RAPIDAPI_KEY");
   return {
@@ -14,36 +17,19 @@ function headers() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// === Helpers ===
+/* =========================
+   Helpers
+   ========================= */
 function withGif(ex) {
   const id = ex?.id || ex?.uuid || ex?.name;
   const fallback = id
     ? `https://v2.exercisedb.io/image/${encodeURIComponent(id)}.gif`
     : null;
-  return {
-    ...ex,
-    gifUrl: ex.gifUrl || ex.image || ex.imageUrl || fallback,
-  };
+  return { ...ex, gifUrl: ex.gifUrl || ex.image || ex.imageUrl || fallback };
 }
 
 function shuffle(arr) {
   return [...arr].sort(() => Math.random() - 0.5);
-}
-
-function buildDay(name, list, label) {
-  return {
-    name,
-    blocks: (list || []).map((ex) => ({
-      id: ex.id || ex.name,
-      name: ex.name,
-      equipment: ex.equipment || "body weight",
-      target: ex.target || label,
-      gifUrl: ex.gifUrl,
-      sets: 3,
-      reps: 8,
-      restSec: 90,
-    })),
-  };
 }
 
 function dedup(list) {
@@ -68,7 +54,7 @@ async function safeFetch(url) {
   }
 }
 
-/** Normalize various synonyms to ExerciseDB's exact target keys */
+/** Map synonyms → ExerciseDB's exact target keys */
 const TARGET_ALIASES = Object.freeze({
   // Chest
   "pectoralis major": "pectorals",
@@ -116,11 +102,9 @@ function normalizeTarget(t) {
   const key = String(t || "")
     .trim()
     .toLowerCase();
-  // find exact alias (case-insensitive)
   for (const [raw, normalized] of Object.entries(TARGET_ALIASES)) {
     if (raw.toLowerCase() === key) return normalized;
   }
-  // fall back to whatever was provided
   return t;
 }
 
@@ -136,8 +120,79 @@ async function fetchTargets(targets) {
   return dedup(results);
 }
 
-// === Groups & Areas ===
-// Use the EXACT strings ExerciseDB expects (left side are our “display” names; right side are API target keys)
+/* -------- Volume & plan building -------- */
+function getVolume(req) {
+  const intensity = String(req.query.intensity || "standard").toLowerCase();
+  const presets = {
+    easy: { sets: 2, reps: 8, restSec: 60, perDay: 4, days: 3 },
+    standard: { sets: 3, reps: 10, restSec: 90, perDay: 6, days: 3 },
+    hard: { sets: 4, reps: 8, restSec: 120, perDay: 8, days: 3 },
+  };
+  const base = presets[intensity] || presets.standard;
+
+  return {
+    sets: parseInt(req.query.sets || base.sets, 10),
+    reps: parseInt(req.query.reps || base.reps, 10),
+    restSec: parseInt(req.query.restSec || base.restSec, 10),
+    perDay: Math.min(parseInt(req.query.perDay || base.perDay, 10), 12),
+    days: Math.min(parseInt(req.query.days || base.days, 10), 6),
+  };
+}
+
+function buildDay(name, list, label, vol) {
+  return {
+    name,
+    blocks: (list || []).map((ex) => ({
+      id: ex.id || ex.name,
+      name: ex.name,
+      equipment: ex.equipment || "body weight",
+      target: ex.target || label,
+      gifUrl: ex.gifUrl,
+      sets: vol.sets,
+      reps: vol.reps,
+      restSec: vol.restSec,
+    })),
+  };
+}
+
+/** Distribute exercises across days, balanced by target (round-robin) and capped per day */
+function buildBalancedDays(exercises, { days = 3, perDay = 6 } = {}) {
+  const buckets = exercises.reduce((acc, ex) => {
+    const key = (ex.target || "other").toLowerCase();
+    (acc[key] ||= []).push(ex);
+    return acc;
+  }, {});
+  Object.values(buckets).forEach((arr) => arr.sort(() => Math.random() - 0.5));
+
+  const result = Array.from({ length: days }, () => []);
+  const bucketKeys = Object.keys(buckets);
+
+  while (bucketKeys.length) {
+    for (const key of [...bucketKeys]) {
+      const ex = buckets[key].pop();
+      if (ex) {
+        // place into next day with capacity
+        let placed = false;
+        for (let d = 0; d < days; d++) {
+          if (result[d].length < perDay) {
+            result[d].push(ex);
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) return result; // all days full
+      } else {
+        const idx = bucketKeys.indexOf(key);
+        if (idx >= 0) bucketKeys.splice(idx, 1);
+      }
+    }
+  }
+  return result;
+}
+
+/* =========================
+   Groups & Areas (ExerciseDB keys)
+   ========================= */
 const GROUPS = {
   Chest: ["pectorals", "serratus anterior"],
   Back: ["lats", "upper back", "traps", "spine", "levator scapulae"],
@@ -148,37 +203,40 @@ const GROUPS = {
   Cardio: ["cardiovascular system"],
 };
 
-// Larger areas aggregate groups above
 const AREAS = {
   UpperBody: ["Chest", "Back", "Shoulders", "Arms"],
   LowerBody: ["Core", "Legs"],
   FullBody: ["Chest", "Back", "Shoulders", "Arms", "Core", "Legs", "Cardio"],
 };
 
-// === ROUTES ===
+/* =========================
+   Routes
+   ========================= */
 
-// Quick health check
+// Health check
 router.get("/health", async (_req, res) => {
   try {
     const r = await fetch(`${BASE}/exercises/targetList`, {
       headers: headers(),
     });
-    const ok = r.ok;
-    const host = process.env.RAPIDAPI_HOST || "exercisedb.p.rapidapi.com";
-    res.json({ ok, host, note: "If ok=false, check RAPIDAPI_KEY/host." });
+    res.json({
+      ok: r.ok,
+      host: process.env.RAPIDAPI_HOST || "exercisedb.p.rapidapi.com",
+      note: "If ok=false, verify RAPIDAPI_KEY and host.",
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// List all groups (used by Plans page)
+// List groups
 router.get("/groups", (_req, res) => {
   res.json(
     Object.entries(GROUPS).map(([group, targets]) => ({ group, targets }))
   );
 });
 
-// List exercises for a single group
+// Exercises for a group
 router.get("/group/:group", async (req, res) => {
   const groupParam = (req.params.group || "").toLowerCase();
   const entry = Object.entries(GROUPS).find(
@@ -210,7 +268,7 @@ router.get("/group/:group", async (req, res) => {
   }
 });
 
-// Build 3-day plan for a single group
+// 3-day (configurable) plan for a group
 router.get("/plans/group/:group", async (req, res) => {
   const groupParam = (req.params.group || "").toLowerCase();
   const entry = Object.entries(GROUPS).find(
@@ -222,16 +280,36 @@ router.get("/plans/group/:group", async (req, res) => {
       .json({ error: `Unknown group "${req.params.group}"` });
 
   const [groupName, targets] = entry;
+  const vol = getVolume(req);
 
   try {
     const merged = shuffle(await fetchTargets(targets));
-    const chunk = Math.ceil(merged.length / 3) || 5;
-    const days = [
-      buildDay("Day 1", merged.slice(0, chunk), groupName),
-      buildDay("Day 2", merged.slice(chunk, chunk * 2), groupName),
-      buildDay("Day 3", merged.slice(chunk * 2, chunk * 3), groupName),
-    ];
-    res.json({ group: groupName, targets, days });
+    if (merged.length === 0) {
+      return res.json({
+        group: groupName,
+        message: "No exercises available for this group right now.",
+        days: Array.from({ length: vol.days }, (_, i) =>
+          buildDay(`Day ${i + 1}`, [], groupName, vol)
+        ),
+        volume: vol,
+      });
+    }
+
+    const dayLists = buildBalancedDays(merged, {
+      days: vol.days,
+      perDay: vol.perDay,
+    });
+    const days = dayLists.map((list, i) =>
+      buildDay(`Day ${i + 1}`, list, groupName, vol)
+    );
+
+    res.json({
+      group: groupName,
+      targets,
+      total: merged.length,
+      days,
+      volume: vol,
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server error building group plan" });
@@ -243,7 +321,7 @@ router.get("/areas", (_req, res) => {
   res.json(Object.entries(AREAS).map(([area, groups]) => ({ area, groups })));
 });
 
-// List exercises for an area
+// Exercises for an area
 router.get("/area/:area", async (req, res) => {
   const areaParam = (req.params.area || "").toLowerCase();
   const entry = Object.entries(AREAS).find(
@@ -274,7 +352,7 @@ router.get("/area/:area", async (req, res) => {
   }
 });
 
-// Build 3-day plan for an area
+// 3-day (configurable) plan for an area
 router.get("/plans/area/:area", async (req, res) => {
   const areaParam = (req.params.area || "").toLowerCase();
   const entry = Object.entries(AREAS).find(
@@ -285,6 +363,7 @@ router.get("/plans/area/:area", async (req, res) => {
 
   const [areaName, groups] = entry;
   const allTargets = groups.flatMap((g) => GROUPS[g] || []);
+  const vol = getVolume(req);
 
   try {
     const merged = shuffle(await fetchTargets(allTargets));
@@ -293,22 +372,28 @@ router.get("/plans/area/:area", async (req, res) => {
       return res.json({
         area: areaName,
         message: "No exercises available for this area right now.",
-        days: [
-          buildDay("Day 1", [], areaName),
-          buildDay("Day 2", [], areaName),
-          buildDay("Day 3", [], areaName),
-        ],
+        days: Array.from({ length: vol.days }, (_, i) =>
+          buildDay(`Day ${i + 1}`, [], areaName, vol)
+        ),
+        volume: vol,
       });
     }
 
-    const chunk = Math.ceil(merged.length / 3);
-    const days = [
-      buildDay("Day 1", merged.slice(0, chunk), areaName),
-      buildDay("Day 2", merged.slice(chunk, chunk * 2), areaName),
-      buildDay("Day 3", merged.slice(chunk * 2), areaName),
-    ];
+    const dayLists = buildBalancedDays(merged, {
+      days: vol.days,
+      perDay: vol.perDay,
+    });
+    const days = dayLists.map((list, i) =>
+      buildDay(`Day ${i + 1}`, list, areaName, vol)
+    );
 
-    res.json({ area: areaName, groups, total: merged.length, days });
+    res.json({
+      area: areaName,
+      groups,
+      total: merged.length,
+      days,
+      volume: vol,
+    });
   } catch (e) {
     console.error("❌ Area plan error:", e);
     res
@@ -317,7 +402,7 @@ router.get("/plans/area/:area", async (req, res) => {
   }
 });
 
-// Single exercise
+// Single exercise by ID
 router.get("/exercise/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -339,7 +424,7 @@ router.get("/exercise/:id", async (req, res) => {
   }
 });
 
-// passthrough: target list
+// Passthrough: target list
 router.get("/targets", async (_req, res) => {
   try {
     const r = await fetch(`${BASE}/exercises/targetList`, {
@@ -357,11 +442,10 @@ router.get("/targets", async (_req, res) => {
   }
 });
 
-// passthrough: exercises by target
+// Passthrough: exercises by target
 router.get("/target/:muscle", async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || "20", 10), 50);
   const offset = parseInt(req.query.offset || "0", 10);
-
   try {
     const mus = normalizeTarget(req.params.muscle);
     const all = await safeFetch(
