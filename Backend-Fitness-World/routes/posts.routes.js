@@ -47,7 +47,6 @@ router.get("/", async (req, res) => {
 
     const userId = getOptionalUserId(req);
 
-    // likedByMe + canDelete
     if (userId && posts.length) {
       const postIds = posts.map((p) => p._id);
       const liked = await Like.find({ post: { $in: postIds }, user: userId })
