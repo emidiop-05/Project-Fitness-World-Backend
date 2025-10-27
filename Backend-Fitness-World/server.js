@@ -52,6 +52,7 @@ app.use("/api/uploads", require("./routes/uploads.routes"));
 app.use("/api/exercises", require("./routes/exercises.routes"));
 app.use("/api/posts", require("./routes/posts.routes"));
 app.use("/api/comments", require("./routes/comments.routes"));
+app.use("/api/ai", require("./routes/ai.routes"));
 
 connectDB();
 
