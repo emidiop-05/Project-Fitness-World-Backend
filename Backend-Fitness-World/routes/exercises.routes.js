@@ -44,7 +44,7 @@ function buildDay(name, list, label) {
 
 function dedup(list) {
   const seen = new Set();
-  return list.filter((ex) => {
+  return (list || []).filter((ex) => {
     const key = ex.id || ex.name;
     if (!key || seen.has(key)) return false;
     seen.add(key);
@@ -64,10 +64,22 @@ async function safeFetch(url) {
   }
 }
 
+async function fetchTargets(targets) {
+  const results = [];
+  for (const t of targets) {
+    const data = await safeFetch(
+      `${BASE}/exercises/target/${encodeURIComponent(t)}`
+    );
+    results.push(...data);
+    await sleep(250); // throttle to avoid rate limits
+  }
+  return dedup(results);
+}
+
 // === Groups & Areas ===
 const GROUPS = {
   Chest: ["pectorals", "serratus anterior"],
-  Back: ["lats", "upper back", "traps"],
+  Back: ["lats", "upper back", "traps", "spine", "levator scapulae"],
   Shoulders: ["delts"],
   Arms: ["biceps", "triceps", "forearms"],
   Core: ["abs", "obliques"],
@@ -81,42 +93,127 @@ const AREAS = {
   FullBody: ["Chest", "Back", "Shoulders", "Arms", "Core", "Legs", "Cardio"],
 };
 
-// === Fetch utilities ===
-async function fetchTargets(targets) {
-  const results = [];
-  for (const t of targets) {
-    const data = await safeFetch(
-      `${BASE}/exercises/target/${encodeURIComponent(t)}`
-    );
-    results.push(...data);
-    await sleep(250); // throttle a bit
-  }
-  return dedup(results);
-}
-
 // === ROUTES ===
+
+// List all groups (used by Plans page)
+router.get("/groups", (_req, res) => {
+  res.json(
+    Object.entries(GROUPS).map(([group, targets]) => ({ group, targets }))
+  );
+});
+
+// List exercises for a single group
+router.get("/group/:group", async (req, res) => {
+  const groupParam = (req.params.group || "").toLowerCase();
+  const entry = Object.entries(GROUPS).find(
+    ([g]) => g.toLowerCase() === groupParam
+  );
+  if (!entry)
+    return res
+      .status(404)
+      .json({ error: `Unknown group "${req.params.group}"` });
+
+  const [groupName, targets] = entry;
+  const limit = Math.min(parseInt(req.query.limit || "40", 10), 100);
+  const offset = parseInt(req.query.offset || "0", 10);
+
+  try {
+    const merged = await fetchTargets(targets);
+    const slice = merged.slice(offset, offset + limit);
+    res.json({
+      group: groupName,
+      targets,
+      total: merged.length,
+      limit,
+      offset,
+      results: slice,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error fetching group" });
+  }
+});
+
+// Build 3-day plan for a single group
+router.get("/plans/group/:group", async (req, res) => {
+  const groupParam = (req.params.group || "").toLowerCase();
+  const entry = Object.entries(GROUPS).find(
+    ([g]) => g.toLowerCase() === groupParam
+  );
+  if (!entry)
+    return res
+      .status(404)
+      .json({ error: `Unknown group "${req.params.group}"` });
+
+  const [groupName, targets] = entry;
+
+  try {
+    const merged = shuffle(await fetchTargets(targets));
+    const chunk = Math.ceil(merged.length / 3) || 5;
+    const days = [
+      buildDay("Day 1", merged.slice(0, chunk), groupName),
+      buildDay("Day 2", merged.slice(chunk, chunk * 2), groupName),
+      buildDay("Day 3", merged.slice(chunk * 2, chunk * 3), groupName),
+    ];
+    res.json({ group: groupName, targets, days });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error building group plan" });
+  }
+});
+
+// List areas
 router.get("/areas", (_req, res) => {
   res.json(Object.entries(AREAS).map(([area, groups]) => ({ area, groups })));
 });
 
+// List exercises for an area
+router.get("/area/:area", async (req, res) => {
+  const areaParam = (req.params.area || "").toLowerCase();
+  const entry = Object.entries(AREAS).find(
+    ([a]) => a.toLowerCase() === areaParam
+  );
+  if (!entry)
+    return res.status(404).json({ error: `Unknown area "${req.params.area}"` });
+
+  const [areaName, groups] = entry;
+  const allTargets = groups.flatMap((g) => GROUPS[g] || []);
+  const limit = Math.min(parseInt(req.query.limit || "60", 10), 120);
+  const offset = parseInt(req.query.offset || "0", 10);
+
+  try {
+    const merged = await fetchTargets(allTargets);
+    const slice = merged.slice(offset, offset + limit);
+    res.json({
+      area: areaName,
+      groups,
+      total: merged.length,
+      limit,
+      offset,
+      results: slice,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error fetching area" });
+  }
+});
+
+// Build 3-day plan for an area (UpperBody / LowerBody / FullBody)
 router.get("/plans/area/:area", async (req, res) => {
   const areaParam = (req.params.area || "").toLowerCase();
   const entry = Object.entries(AREAS).find(
     ([a]) => a.toLowerCase() === areaParam
   );
-
-  if (!entry) {
+  if (!entry)
     return res.status(404).json({ error: `Unknown area "${req.params.area}"` });
-  }
 
-  const areaName = entry[0];
-  const groups = entry[1];
+  const [areaName, groups] = entry;
   const allTargets = groups.flatMap((g) => GROUPS[g] || []);
 
   try {
-    const exercises = await fetchTargets(allTargets);
-    if (exercises.length === 0) {
-      console.warn(`⚠️ No data returned for ${areaName}`);
+    const merged = shuffle(await fetchTargets(allTargets));
+
+    if (merged.length === 0) {
       return res.json({
         area: areaName,
         message: "No exercises available for this area right now.",
@@ -128,20 +225,77 @@ router.get("/plans/area/:area", async (req, res) => {
       });
     }
 
-    const shuffled = shuffle(exercises);
-    const chunk = Math.ceil(shuffled.length / 3);
+    const chunk = Math.ceil(merged.length / 3);
     const days = [
-      buildDay("Day 1", shuffled.slice(0, chunk), areaName),
-      buildDay("Day 2", shuffled.slice(chunk, chunk * 2), areaName),
-      buildDay("Day 3", shuffled.slice(chunk * 2), areaName),
+      buildDay("Day 1", merged.slice(0, chunk), areaName),
+      buildDay("Day 2", merged.slice(chunk, chunk * 2), areaName),
+      buildDay("Day 3", merged.slice(chunk * 2), areaName),
     ];
 
-    res.json({ area: areaName, groups, total: exercises.length, days });
+    res.json({ area: areaName, groups, total: merged.length, days });
   } catch (e) {
     console.error("❌ Area plan error:", e);
     res
       .status(500)
       .json({ error: "Internal error building plan", details: e.message });
+  }
+});
+
+// Single exercise
+router.get("/exercise/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await fetch(
+      `${BASE}/exercises/exercise/${encodeURIComponent(id)}`,
+      { headers: headers() }
+    );
+    const data = await r.json();
+    if (!r.ok)
+      return res
+        .status(r.status)
+        .json({ error: data?.message || "Failed to fetch exercise" });
+    const exercise = Array.isArray(data) ? data[0] : data;
+    if (!exercise) return res.status(404).json({ error: "Exercise not found" });
+    return res.json(withGif(exercise));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error fetching exercise" });
+  }
+});
+
+// Target list passthrough (optional)
+router.get("/targets", async (_req, res) => {
+  try {
+    const r = await fetch(`${BASE}/exercises/targetList`, {
+      headers: headers(),
+    });
+    const data = await r.json();
+    if (!r.ok)
+      return res
+        .status(r.status)
+        .json({ error: data?.message || "Failed to fetch targets" });
+    res.json(data);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error fetching targets" });
+  }
+});
+
+// Exercises by target passthrough (optional)
+router.get("/target/:muscle", async (req, res) => {
+  const { muscle } = req.params;
+  const limit = Math.min(parseInt(req.query.limit || "20", 10), 50);
+  const offset = parseInt(req.query.offset || "0", 10);
+
+  try {
+    const all = await safeFetch(
+      `${BASE}/exercises/target/${encodeURIComponent(muscle)}`
+    );
+    const slice = all.slice(offset, offset + limit);
+    res.json({ total: all.length, limit, offset, results: slice });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error fetching exercises" });
   }
 });
 
