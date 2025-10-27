@@ -1,5 +1,6 @@
 const express = require("express");
 const router = express.Router();
+
 const BASE = "https://exercisedb.p.rapidapi.com";
 
 // === Config ===
@@ -19,7 +20,10 @@ function withGif(ex) {
   const fallback = id
     ? `https://v2.exercisedb.io/image/${encodeURIComponent(id)}.gif`
     : null;
-  return { ...ex, gifUrl: ex.gifUrl || ex.image || ex.imageUrl || fallback };
+  return {
+    ...ex,
+    gifUrl: ex.gifUrl || ex.image || ex.imageUrl || fallback,
+  };
 }
 
 function shuffle(arr) {
@@ -64,12 +68,68 @@ async function safeFetch(url) {
   }
 }
 
+/** Normalize various synonyms to ExerciseDB's exact target keys */
+const TARGET_ALIASES = Object.freeze({
+  // Chest
+  "pectoralis major": "pectorals",
+  pectorals: "pectorals",
+
+  // Back
+  "latissimus dorsi": "lats",
+  lats: "lats",
+  "upper back": "upper back",
+  trapezius: "traps",
+  traps: "traps",
+  spine: "spine",
+  "levator scapulae": "levator scapulae",
+
+  // Shoulders
+  deltoids: "delts",
+  delts: "delts",
+
+  // Arms
+  "biceps brachii": "biceps",
+  biceps: "biceps",
+  "triceps brachii": "triceps",
+  triceps: "triceps",
+  forearms: "forearms",
+
+  // Core
+  abdominals: "abs",
+  abs: "abs",
+  obliques: "obliques",
+
+  // Legs
+  quadriceps: "quads",
+  quads: "quads",
+  hamstrings: "hamstrings",
+  glutes: "glutes",
+  calves: "calves",
+  adductors: "adductors",
+  abductors: "abductors",
+
+  // Cardio
+  "cardiovascular system": "cardiovascular system",
+});
+
+function normalizeTarget(t) {
+  const key = String(t || "")
+    .trim()
+    .toLowerCase();
+  // find exact alias (case-insensitive)
+  for (const [raw, normalized] of Object.entries(TARGET_ALIASES)) {
+    if (raw.toLowerCase() === key) return normalized;
+  }
+  // fall back to whatever was provided
+  return t;
+}
+
 async function fetchTargets(targets) {
   const results = [];
   for (const t of targets) {
-    const data = await safeFetch(
-      `${BASE}/exercises/target/${encodeURIComponent(t)}`
-    );
+    const normalized = normalizeTarget(t);
+    const url = `${BASE}/exercises/target/${encodeURIComponent(normalized)}`;
+    const data = await safeFetch(url);
     results.push(...data);
     await sleep(250); // throttle to avoid rate limits
   }
@@ -77,6 +137,7 @@ async function fetchTargets(targets) {
 }
 
 // === Groups & Areas ===
+// Use the EXACT strings ExerciseDB expects (left side are our “display” names; right side are API target keys)
 const GROUPS = {
   Chest: ["pectorals", "serratus anterior"],
   Back: ["lats", "upper back", "traps", "spine", "levator scapulae"],
@@ -87,6 +148,7 @@ const GROUPS = {
   Cardio: ["cardiovascular system"],
 };
 
+// Larger areas aggregate groups above
 const AREAS = {
   UpperBody: ["Chest", "Back", "Shoulders", "Arms"],
   LowerBody: ["Core", "Legs"],
@@ -94,6 +156,20 @@ const AREAS = {
 };
 
 // === ROUTES ===
+
+// Quick health check
+router.get("/health", async (_req, res) => {
+  try {
+    const r = await fetch(`${BASE}/exercises/targetList`, {
+      headers: headers(),
+    });
+    const ok = r.ok;
+    const host = process.env.RAPIDAPI_HOST || "exercisedb.p.rapidapi.com";
+    res.json({ ok, host, note: "If ok=false, check RAPIDAPI_KEY/host." });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // List all groups (used by Plans page)
 router.get("/groups", (_req, res) => {
@@ -198,7 +274,7 @@ router.get("/area/:area", async (req, res) => {
   }
 });
 
-// Build 3-day plan for an area (UpperBody / LowerBody / FullBody)
+// Build 3-day plan for an area
 router.get("/plans/area/:area", async (req, res) => {
   const areaParam = (req.params.area || "").toLowerCase();
   const entry = Object.entries(AREAS).find(
@@ -263,7 +339,7 @@ router.get("/exercise/:id", async (req, res) => {
   }
 });
 
-// Target list passthrough (optional)
+// passthrough: target list
 router.get("/targets", async (_req, res) => {
   try {
     const r = await fetch(`${BASE}/exercises/targetList`, {
@@ -281,15 +357,15 @@ router.get("/targets", async (_req, res) => {
   }
 });
 
-// Exercises by target passthrough (optional)
+// passthrough: exercises by target
 router.get("/target/:muscle", async (req, res) => {
-  const { muscle } = req.params;
   const limit = Math.min(parseInt(req.query.limit || "20", 10), 50);
   const offset = parseInt(req.query.offset || "0", 10);
 
   try {
+    const mus = normalizeTarget(req.params.muscle);
     const all = await safeFetch(
-      `${BASE}/exercises/target/${encodeURIComponent(muscle)}`
+      `${BASE}/exercises/target/${encodeURIComponent(mus)}`
     );
     const slice = all.slice(offset, offset + limit);
     res.json({ total: all.length, limit, offset, results: slice });
