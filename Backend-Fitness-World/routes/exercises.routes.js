@@ -23,8 +23,8 @@ const GROUPS = {
   Back: ["lats", "upper back", "traps", "spine", "levator scapulae"],
   Shoulders: ["delts"],
   Arms: ["biceps", "triceps", "forearms"],
-  Core: ["abs", "obliques", "adductors"],
-  Legs: ["quads", "hamstrings", "glutes", "calves", "abductors"],
+  Core: ["abs"], // moved adductors fully to Legs
+  Legs: ["quads", "hamstrings", "glutes", "calves", "abductors", "adductors"],
   Cardio: ["cardiovascular system"],
 };
 
@@ -52,7 +52,7 @@ function shuffle(arr) {
 function buildDay(name, list, muscleLabel) {
   return {
     name,
-    blocks: list.map((ex) => ({
+    blocks: (list || []).map((ex) => ({
       id: ex.id || ex.name,
       name: ex.name,
       equipment: ex.equipment || "body weight",
@@ -64,6 +64,29 @@ function buildDay(name, list, muscleLabel) {
     })),
   };
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function safeFetchByTarget(target) {
+  try {
+    return await fetchByTarget(target);
+  } catch (e) {
+    console.warn("[exercises] target failed:", target, String(e).slice(0, 160));
+    return [];
+  }
+}
+
+async function fetchTargetsWithLimit(targets, concurrency = 2, delayMs = 250) {
+  const out = [];
+  for (let i = 0; i < targets.length; i += concurrency) {
+    const chunk = targets.slice(i, i + concurrency);
+    const results = await Promise.all(chunk.map((t) => safeFetchByTarget(t)));
+    out.push(...results.flat());
+    if (i + concurrency < targets.length) await sleep(delayMs);
+  }
+  return out;
+}
+// ---------------------------------------------------------
 
 router.get("/targets", async (_req, res) => {
   try {
@@ -184,7 +207,7 @@ router.get("/group/:group", async (req, res) => {
   const offset = parseInt(req.query.offset || "0", 10);
 
   try {
-    const lists = await Promise.all(targets.map((t) => fetchByTarget(t)));
+    const lists = await Promise.all(targets.map((t) => safeFetchByTarget(t)));
     const merged = lists.flat();
     const seen = new Set();
     const dedup = merged.filter((ex) => {
@@ -223,7 +246,7 @@ router.get("/plans/group/:group", async (req, res) => {
   const targets = entry[1];
 
   try {
-    const lists = await Promise.all(targets.map((t) => fetchByTarget(t)));
+    const lists = await Promise.all(targets.map((t) => safeFetchByTarget(t)));
     const merged = shuffle(lists.flat());
 
     const day1 = merged.slice(0, 5);
@@ -265,8 +288,7 @@ router.get("/area/:area", async (req, res) => {
   const offset = parseInt(req.query.offset || "0", 10);
 
   try {
-    const lists = await Promise.all(allTargets.map((t) => fetchByTarget(t)));
-    const merged = lists.flat();
+    const merged = await fetchTargetsWithLimit(allTargets, 2, 250);
     const seen = new Set();
     const dedup = merged.filter((ex) => {
       const key = ex.id || ex.name;
@@ -296,8 +318,14 @@ router.get("/plans/area/:area", async (req, res) => {
   const allTargets = groups.flatMap((g) => GROUPS[g] || []);
 
   try {
-    const lists = await Promise.all(allTargets.map((t) => fetchByTarget(t)));
-    const merged = shuffle(lists.flat());
+    const merged = shuffle(await fetchTargetsWithLimit(allTargets, 2, 250));
+
+    if (!merged || merged.length === 0) {
+      return res.status(502).json({
+        error: "No exercises available for this area right now",
+        area: areaName,
+      });
+    }
 
     const day1 = merged.slice(0, 6);
     const day2 = merged.slice(6, 12);
@@ -313,7 +341,7 @@ router.get("/plans/area/:area", async (req, res) => {
       ],
     });
   } catch (e) {
-    console.error(e);
+    console.error("[exercises] area plan error:", e);
     res.status(500).json({ error: "Server error building area plan" });
   }
 });
