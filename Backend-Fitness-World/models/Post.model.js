@@ -16,5 +16,6 @@ const postSchema = new Schema(
 );
 
 postSchema.index({ createdAt: -1 });
+postSchema.index({ author: 1, createdAt: -1 });
 
 module.exports = model("Post", postSchema);

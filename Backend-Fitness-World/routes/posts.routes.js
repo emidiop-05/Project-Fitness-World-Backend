@@ -9,7 +9,7 @@ const requireAuth = require("../middleware/requireAuth");
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
-/** Helper: try to read userId from Authorization header without forcing auth */
+/** Helper: read userId from Authorization header without forcing auth */
 function getOptionalUserId(req) {
   const auth = req.headers.authorization || "";
   const [scheme, token] = auth.split(" ");
@@ -22,6 +22,7 @@ function getOptionalUserId(req) {
   }
 }
 
+/** LIST (public, with optional q filter, likedByMe, canDelete when authed) */
 router.get("/", async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page || "1"), 1);
@@ -41,22 +42,29 @@ router.get("/", async (req, res) => {
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
-        .populate("author", "firstName lastName nickName profileImage")
+        .populate("author", "_id firstName lastName nickName profileImage")
         .lean(),
       Post.countDocuments(filter),
     ]);
 
-    // Mark likedByMe when user is logged in
     const userId = getOptionalUserId(req);
+
+    // likedByMe + canDelete
     if (userId && posts.length) {
       const postIds = posts.map((p) => p._id);
       const liked = await Like.find({ post: { $in: postIds }, user: userId })
         .select("post")
         .lean();
       const likedSet = new Set(liked.map((l) => String(l.post)));
+
       posts.forEach((p) => {
         p.likedByMe = likedSet.has(String(p._id));
+        const authorId =
+          p.author && typeof p.author === "object" ? p.author._id : p.author;
+        p.canDelete = String(authorId) === String(userId);
       });
+    } else {
+      posts.forEach((p) => (p.canDelete = false));
     }
 
     res.json({ page, limit, total, posts });
@@ -66,18 +74,25 @@ router.get("/", async (req, res) => {
   }
 });
 
+/** DETAIL by slug (public) */
 router.get("/:slug", async (req, res) => {
   try {
     const post = await Post.findOne({ slug: req.params.slug })
-      .populate("author", "firstName lastName nickName profileImage")
+      .populate("author", "_id firstName lastName nickName profileImage")
       .lean();
     if (!post) return res.status(404).json({ error: "Post not found" });
 
-    // Mark likedByMe for single post too
     const userId = getOptionalUserId(req);
     if (userId) {
       const liked = await Like.exists({ post: post._id, user: userId });
       post.likedByMe = !!liked;
+      const authorId =
+        post.author && typeof post.author === "object"
+          ? post.author._id
+          : post.author;
+      post.canDelete = String(authorId) === String(userId);
+    } else {
+      post.canDelete = false;
     }
 
     res.json(post);
@@ -87,6 +102,7 @@ router.get("/:slug", async (req, res) => {
   }
 });
 
+/** CREATE (authed) */
 router.post("/", requireAuth, async (req, res) => {
   try {
     const { title, body, tags = [], images = [], published = true } = req.body;
@@ -108,15 +124,21 @@ router.post("/", requireAuth, async (req, res) => {
 
     const populated = await Post.findById(post._id).populate(
       "author",
-      "firstName lastName nickName profileImage"
+      "_id firstName lastName nickName profileImage"
     );
 
-    res.status(201).json(populated);
+    // creator can delete their own post
+    const obj = populated.toObject();
+    obj.canDelete = String(obj.author._id) === String(req.user.sub);
+
+    res.status(201).json(obj);
   } catch (err) {
+    console.error(err);
     res.status(400).json({ error: err.message || "Failed to create post" });
   }
 });
 
+/** UPDATE (author or admin) */
 router.patch("/:id", requireAuth, async (req, res) => {
   try {
     const p = await Post.findById(req.params.id);
@@ -140,39 +162,61 @@ router.patch("/:id", requireAuth, async (req, res) => {
     await p.save();
     const populated = await Post.findById(p._id).populate(
       "author",
-      "firstName lastName nickName profileImage"
+      "_id firstName lastName nickName profileImage"
     );
-    res.json(populated);
+
+    const obj = populated.toObject();
+    obj.canDelete =
+      String(obj.author._id) === String(req.user.sub) ||
+      req.user.role === "admin";
+
+    res.json(obj);
   } catch (err) {
+    console.error(err);
     res.status(400).json({ error: err.message || "Failed to update post" });
   }
 });
 
+/** DELETE (author or admin) — atomic author check */
 router.delete("/:id", requireAuth, async (req, res) => {
   try {
-    const p = await Post.findById(req.params.id);
-    if (!p) return res.status(404).json({ error: "Post not found" });
-    if (p.author.toString() !== req.user.sub && req.user.role !== "admin") {
-      return res.status(403).json({ error: "Forbidden" });
+    const { id } = req.params;
+
+    // Admin can delete any post
+    if (req.user.role === "admin") {
+      const p = await Post.findById(id);
+      if (!p) return res.status(404).json({ error: "Post not found" });
+
+      await Promise.all([
+        Comment.deleteMany({ post: p._id }),
+        Like.deleteMany({ post: p._id }),
+        Post.deleteOne({ _id: p._id }),
+      ]);
+      return res.status(204).end();
     }
 
+    // Author: single atomic operation
+    const deleted = await Post.findOneAndDelete({
+      _id: id,
+      author: req.user.sub,
+    });
+    if (!deleted) return res.status(403).json({ error: "Forbidden" });
+
     await Promise.all([
-      Comment.deleteMany({ post: p._id }),
-      Like.deleteMany({ post: p._id }),
-      p.deleteOne(),
+      Comment.deleteMany({ post: id }),
+      Like.deleteMany({ post: id }),
     ]);
 
-    res.status(204).end();
+    return res.status(204).end();
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Failed to delete post" });
   }
 });
 
-// Like toggle — now returns likesCount as well
 router.post("/:postId/like", requireAuth, async (req, res) => {
   const { postId } = req.params;
   try {
-    // Try to like
     await Like.create({ post: postId, user: req.user.sub });
     const updated = await Post.findByIdAndUpdate(
       postId,
