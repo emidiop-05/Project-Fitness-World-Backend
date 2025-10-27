@@ -1,4 +1,3 @@
-// routes/exercises.routes.js
 const express = require("express");
 const router = express.Router();
 const BASE = "https://exercisedb.p.rapidapi.com";
@@ -11,7 +10,6 @@ function headers() {
   };
 }
 
-/** ✅ ensure we always have a gifUrl */
 function withGif(ex) {
   const id = ex?.id || ex?._id || ex?.uuid || ex?.name || "";
   const fallback = id
@@ -23,7 +21,6 @@ function withGif(ex) {
   };
 }
 
-/** 👇 Group → targets mapping (unchanged) */
 const GROUPS = {
   Chest: ["pectorals", "serratus anterior"],
   Back: ["lats", "upper back", "traps", "spine", "levator scapulae"],
@@ -34,7 +31,6 @@ const GROUPS = {
   Cardio: ["cardiovascular system"],
 };
 
-/** helper: fetch all exercises for a target */
 async function fetchByTarget(target) {
   const r = await fetch(
     `${BASE}/exercises/target/${encodeURIComponent(target)}`,
@@ -45,16 +41,13 @@ async function fetchByTarget(target) {
   const data = await r.json();
   if (!r.ok) throw new Error(data?.message || `Failed target ${target}`);
   const list = Array.isArray(data) ? data : [];
-  // ✅ normalize gifs for every item
   return list.map(withGif);
 }
 
-/** helper: simple shuffle */
 function shuffle(arr) {
   return [...arr].sort(() => Math.random() - 0.5);
 }
 
-/** helper: build a day from exercises (kept same, your logic intact) */
 function buildDay(name, list, muscleLabel) {
   return {
     name,
@@ -63,7 +56,6 @@ function buildDay(name, list, muscleLabel) {
       name: ex.name,
       equipment: ex.equipment || "body weight",
       target: ex.target || muscleLabel,
-      // ✅ keep your precedence, already ensured by withGif as well
       gifUrl: ex.gifUrl || ex.image || ex.imageUrl || null,
       sets: 3,
       reps: 8,
@@ -72,8 +64,6 @@ function buildDay(name, list, muscleLabel) {
   };
 }
 
-/** --- existing endpoints you already have --- */
-// GET /api/exercises/targets
 router.get("/targets", async (_req, res) => {
   try {
     const r = await fetch(`${BASE}/exercises/targetList`, {
@@ -91,7 +81,6 @@ router.get("/targets", async (_req, res) => {
   }
 });
 
-// GET /api/exercises/exercise/:id
 router.get("/exercise/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -108,7 +97,6 @@ router.get("/exercise/:id", async (req, res) => {
         .json({ error: data?.message || "Failed to fetch exercise" });
     const exercise = Array.isArray(data) ? data[0] : data;
     if (!exercise) return res.status(404).json({ error: "Exercise not found" });
-    // ✅ ensure gif present
     return res.json(withGif(exercise));
   } catch (e) {
     console.error(e);
@@ -143,7 +131,6 @@ router.get("/target/:muscle", async (req, res) => {
   }
 });
 
-// GET /api/exercises/plans/:muscle
 router.get("/plans/:muscle", async (req, res) => {
   const { muscle } = req.params;
 
@@ -181,14 +168,12 @@ router.get("/plans/:muscle", async (req, res) => {
   }
 });
 
-// GET /api/exercises/groups
 router.get("/groups", (_req, res) => {
   res.json(
     Object.entries(GROUPS).map(([group, targets]) => ({ group, targets }))
   );
 });
 
-// GET /api/exercises/group/:group
 router.get("/group/:group", async (req, res) => {
   const groupParam = (req.params.group || "").toLowerCase();
   const entry = Object.entries(GROUPS).find(
@@ -229,7 +214,6 @@ router.get("/group/:group", async (req, res) => {
   }
 });
 
-// GET /api/exercises/plans/group/:group
 router.get("/plans/group/:group", async (req, res) => {
   const groupParam = (req.params.group || "").toLowerCase();
   const entry = Object.entries(GROUPS).find(

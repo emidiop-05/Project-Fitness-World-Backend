@@ -9,7 +9,6 @@ const requireAuth = require("../middleware/requireAuth");
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
-/** Helper: read userId from Authorization header without forcing auth */
 function getOptionalUserId(req) {
   const auth = req.headers.authorization || "";
   const [scheme, token] = auth.split(" ");
@@ -22,7 +21,6 @@ function getOptionalUserId(req) {
   }
 }
 
-/** LIST (public, with optional q filter, likedByMe, canDelete when authed) */
 router.get("/", async (req, res) => {
   try {
     const page = Math.max(parseInt(req.query.page || "1"), 1);
@@ -74,7 +72,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-/** DETAIL by slug (public) */
 router.get("/:slug", async (req, res) => {
   try {
     const post = await Post.findOne({ slug: req.params.slug })
@@ -102,7 +99,6 @@ router.get("/:slug", async (req, res) => {
   }
 });
 
-/** CREATE (authed) */
 router.post("/", requireAuth, async (req, res) => {
   try {
     const { title, body, tags = [], images = [], published = true } = req.body;
@@ -127,7 +123,6 @@ router.post("/", requireAuth, async (req, res) => {
       "_id firstName lastName nickName profileImage"
     );
 
-    // creator can delete their own post
     const obj = populated.toObject();
     obj.canDelete = String(obj.author._id) === String(req.user.sub);
 
@@ -138,7 +133,6 @@ router.post("/", requireAuth, async (req, res) => {
   }
 });
 
-/** UPDATE (author or admin) */
 router.patch("/:id", requireAuth, async (req, res) => {
   try {
     const p = await Post.findById(req.params.id);
@@ -177,12 +171,10 @@ router.patch("/:id", requireAuth, async (req, res) => {
   }
 });
 
-/** DELETE (author or admin) — atomic author check */
 router.delete("/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Admin can delete any post
     if (req.user.role === "admin") {
       const p = await Post.findById(id);
       if (!p) return res.status(404).json({ error: "Post not found" });
@@ -195,7 +187,6 @@ router.delete("/:id", requireAuth, async (req, res) => {
       return res.status(204).end();
     }
 
-    // Author: single atomic operation
     const deleted = await Post.findOneAndDelete({
       _id: id,
       author: req.user.sub,

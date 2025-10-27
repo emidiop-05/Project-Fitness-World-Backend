@@ -5,7 +5,6 @@ const requireAuth = require("../middleware/requireAuth");
 
 const router = express.Router();
 
-/** List comments for a post */
 router.get("/:postId", async (req, res) => {
   const { postId } = req.params;
   const comments = await Comment.find({ post: postId })
@@ -14,7 +13,6 @@ router.get("/:postId", async (req, res) => {
   res.json(comments);
 });
 
-/** Create comment (authed) */
 router.post("/:postId", requireAuth, async (req, res) => {
   const { postId } = req.params;
   const { body } = req.body;
