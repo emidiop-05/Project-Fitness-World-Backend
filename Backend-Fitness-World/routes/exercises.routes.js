@@ -23,7 +23,7 @@ const GROUPS = {
   Back: ["lats", "upper back", "traps", "spine", "levator scapulae"],
   Shoulders: ["delts"],
   Arms: ["biceps", "triceps", "forearms"],
-  Core: ["abs"], // moved adductors fully to Legs
+  Core: ["abs"],
   Legs: ["quads", "hamstrings", "glutes", "calves", "abductors", "adductors"],
   Cardio: ["cardiovascular system"],
 };
@@ -34,13 +34,40 @@ const AREAS = {
   FullBody: ["Chest", "Back", "Shoulders", "Arms", "Core", "Legs", "Cardio"],
 };
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchJsonWithRetries(url, opts, retries = 3, backoffMs = 400) {
+  let lastErr;
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(url, opts);
+      const text = await res.text();
+      if (!res.ok) {
+        if ((res.status === 429 || res.status >= 500) && i < retries) {
+          await sleep(backoffMs * (i + 1));
+          continue;
+        }
+        throw new Error(`[${res.status}] ${text || "error"}`);
+      }
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text ? JSON.parse(text) : null;
+      }
+    } catch (e) {
+      lastErr = e;
+      if (i < retries) {
+        await sleep(backoffMs * (i + 1));
+        continue;
+      }
+    }
+  }
+  throw lastErr || new Error("request failed");
+}
+
 async function fetchByTarget(target) {
-  const r = await fetch(
-    `${BASE}/exercises/target/${encodeURIComponent(target)}`,
-    { headers: headers() }
-  );
-  const data = await r.json();
-  if (!r.ok) throw new Error(data?.message || `Failed target ${target}`);
+  const url = `${BASE}/exercises/target/${encodeURIComponent(target)}`;
+  const data = await fetchJsonWithRetries(url, { headers: headers() }, 3, 500);
   const list = Array.isArray(data) ? data : [];
   return list.map(withGif);
 }
@@ -65,8 +92,6 @@ function buildDay(name, list, muscleLabel) {
   };
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
 async function safeFetchByTarget(target) {
   try {
     return await fetchByTarget(target);
@@ -76,7 +101,7 @@ async function safeFetchByTarget(target) {
   }
 }
 
-async function fetchTargetsWithLimit(targets, concurrency = 2, delayMs = 250) {
+async function fetchTargetsWithLimit(targets, concurrency = 2, delayMs = 300) {
   const out = [];
   for (let i = 0; i < targets.length; i += concurrency) {
     const chunk = targets.slice(i, i + concurrency);
@@ -86,18 +111,45 @@ async function fetchTargetsWithLimit(targets, concurrency = 2, delayMs = 250) {
   }
   return out;
 }
-// ---------------------------------------------------------
+
+function dedupByIdOrName(list) {
+  const seen = new Set();
+  return (list || []).filter((ex) => {
+    const key = ex.id || ex.name;
+    if (!key) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function splitIntoThreeDays(list, label) {
+  const total = list.length;
+  if (total === 0)
+    return [
+      buildDay("Day 1", [], label),
+      buildDay("Day 2", [], label),
+      buildDay("Day 3", [], label),
+    ];
+  const perDay = Math.max(4, Math.min(6, Math.floor(total / 3) || 4));
+  const day1 = list.slice(0, perDay);
+  const day2 = list.slice(perDay, perDay * 2);
+  const day3 = list.slice(perDay * 2, perDay * 3);
+  return [
+    buildDay("Day 1", day1, label),
+    buildDay("Day 2", day2, label),
+    buildDay("Day 3", day3, label),
+  ];
+}
 
 router.get("/targets", async (_req, res) => {
   try {
-    const r = await fetch(`${BASE}/exercises/targetList`, {
-      headers: headers(),
-    });
-    const data = await r.json();
-    if (!r.ok)
-      return res
-        .status(r.status)
-        .json({ error: data?.message || "Failed to fetch targets" });
+    const data = await fetchJsonWithRetries(
+      `${BASE}/exercises/targetList`,
+      { headers: headers() },
+      2,
+      400
+    );
     res.json(data);
   } catch (e) {
     console.error(e);
@@ -108,15 +160,12 @@ router.get("/targets", async (_req, res) => {
 router.get("/exercise/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const r = await fetch(
+    const data = await fetchJsonWithRetries(
       `${BASE}/exercises/exercise/${encodeURIComponent(id)}`,
-      { headers: headers() }
+      { headers: headers() },
+      2,
+      400
     );
-    const data = await r.json();
-    if (!r.ok)
-      return res
-        .status(r.status)
-        .json({ error: data?.message || "Failed to fetch exercise" });
     const exercise = Array.isArray(data) ? data[0] : data;
     if (!exercise) return res.status(404).json({ error: "Exercise not found" });
     return res.json(withGif(exercise));
@@ -132,16 +181,12 @@ router.get("/target/:muscle", async (req, res) => {
   const offset = parseInt(req.query.offset || "0", 10);
 
   try {
-    const r = await fetch(
+    const allRaw = await fetchJsonWithRetries(
       `${BASE}/exercises/target/${encodeURIComponent(muscle)}`,
-      { headers: headers() }
+      { headers: headers() },
+      2,
+      400
     );
-    const allRaw = await r.json();
-    if (!r.ok)
-      return res
-        .status(r.status)
-        .json({ error: allRaw?.message || "Failed to fetch exercises" });
-
     const all = (Array.isArray(allRaw) ? allRaw : []).map(withGif);
     const slice = all.slice(offset, offset + limit);
     res.json({ total: all.length, limit, offset, results: slice });
@@ -153,33 +198,17 @@ router.get("/target/:muscle", async (req, res) => {
 
 router.get("/plans/:muscle", async (req, res) => {
   const { muscle } = req.params;
-
   try {
-    const r = await fetch(
+    const raw = await fetchJsonWithRetries(
       `${BASE}/exercises/target/${encodeURIComponent(muscle)}`,
-      { headers: headers() }
+      { headers: headers() },
+      2,
+      400
     );
-    const raw = await r.json();
-    if (!r.ok)
-      return res
-        .status(r.status)
-        .json({ error: raw?.message || "Failed to fetch exercises" });
-
     const exercises = (Array.isArray(raw) ? raw : []).map(withGif);
     const shuffled = shuffle(exercises);
-    const pick = (arr, n) => arr.slice(0, n);
-    const day1 = pick(shuffled, 4);
-    const day2 = pick(shuffled.slice(4), 4);
-    const day3 = pick(shuffled.slice(8), 4);
-
-    res.json({
-      muscle,
-      days: [
-        buildDay("Day 1", day1, muscle),
-        buildDay("Day 2", day2, muscle),
-        buildDay("Day 3", day3, muscle),
-      ],
-    });
+    const [d1, d2, d3] = splitIntoThreeDays(shuffled, muscle);
+    res.json({ muscle, days: [d1, d2, d3] });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server error creating plan" });
@@ -208,20 +237,12 @@ router.get("/group/:group", async (req, res) => {
 
   try {
     const lists = await Promise.all(targets.map((t) => safeFetchByTarget(t)));
-    const merged = lists.flat();
-    const seen = new Set();
-    const dedup = merged.filter((ex) => {
-      const key = ex.id || ex.name;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    const total = dedup.length;
-    const slice = dedup.slice(offset, offset + limit);
+    const merged = dedupByIdOrName(lists.flat());
+    const slice = merged.slice(offset, offset + limit);
     res.json({
       group: entry[0],
       targets,
-      total,
+      total: merged.length,
       limit,
       offset,
       results: slice,
@@ -247,21 +268,9 @@ router.get("/plans/group/:group", async (req, res) => {
 
   try {
     const lists = await Promise.all(targets.map((t) => safeFetchByTarget(t)));
-    const merged = shuffle(lists.flat());
-
-    const day1 = merged.slice(0, 5);
-    const day2 = merged.slice(5, 10);
-    const day3 = merged.slice(10, 15);
-
-    res.json({
-      group: groupName,
-      targets,
-      days: [
-        buildDay("Day 1", day1, groupName),
-        buildDay("Day 2", day2, groupName),
-        buildDay("Day 3", day3, groupName),
-      ],
-    });
+    const merged = shuffle(dedupByIdOrName(lists.flat()));
+    const [d1, d2, d3] = splitIntoThreeDays(merged, groupName);
+    res.json({ group: groupName, targets, days: [d1, d2, d3] });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server error building group plan" });
@@ -282,23 +291,22 @@ router.get("/area/:area", async (req, res) => {
 
   const areaName = entry[0];
   const groups = entry[1];
-
   const allTargets = groups.flatMap((g) => GROUPS[g] || []);
   const limit = Math.min(parseInt(req.query.limit || "60", 10), 120);
   const offset = parseInt(req.query.offset || "0", 10);
 
   try {
-    const merged = await fetchTargetsWithLimit(allTargets, 2, 250);
-    const seen = new Set();
-    const dedup = merged.filter((ex) => {
-      const key = ex.id || ex.name;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    const total = dedup.length;
+    const merged = await fetchTargetsWithLimit(allTargets, 2, 300);
+    const dedup = dedupByIdOrName(merged);
     const slice = dedup.slice(offset, offset + limit);
-    res.json({ area: areaName, groups, total, limit, offset, results: slice });
+    res.json({
+      area: areaName,
+      groups,
+      total: dedup.length,
+      limit,
+      offset,
+      results: slice,
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server error fetching area" });
@@ -318,28 +326,18 @@ router.get("/plans/area/:area", async (req, res) => {
   const allTargets = groups.flatMap((g) => GROUPS[g] || []);
 
   try {
-    const merged = shuffle(await fetchTargetsWithLimit(allTargets, 2, 250));
+    const merged = shuffle(await fetchTargetsWithLimit(allTargets, 2, 300));
+    const dedup = dedupByIdOrName(merged);
 
-    if (!merged || merged.length === 0) {
+    if (dedup.length === 0) {
       return res.status(502).json({
         error: "No exercises available for this area right now",
         area: areaName,
       });
     }
 
-    const day1 = merged.slice(0, 6);
-    const day2 = merged.slice(6, 12);
-    const day3 = merged.slice(12, 18);
-
-    res.json({
-      area: areaName,
-      groups,
-      days: [
-        buildDay("Day 1", day1, areaName),
-        buildDay("Day 2", day2, areaName),
-        buildDay("Day 3", day3, areaName),
-      ],
-    });
+    const [d1, d2, d3] = splitIntoThreeDays(dedup, areaName);
+    res.json({ area: areaName, groups, days: [d1, d2, d3] });
   } catch (e) {
     console.error("[exercises] area plan error:", e);
     res.status(500).json({ error: "Server error building area plan" });
