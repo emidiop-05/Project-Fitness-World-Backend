@@ -15,10 +15,7 @@ function withGif(ex) {
   const fallback = id
     ? `https://v2.exercisedb.io/image/${encodeURIComponent(id)}.gif`
     : null;
-  return {
-    ...ex,
-    gifUrl: ex.gifUrl || ex.image || ex.imageUrl || fallback,
-  };
+  return { ...ex, gifUrl: ex.gifUrl || ex.image || ex.imageUrl || fallback };
 }
 
 const GROUPS = {
@@ -31,12 +28,16 @@ const GROUPS = {
   Cardio: ["cardiovascular system"],
 };
 
+const AREAS = {
+  UpperBody: ["Chest", "Back", "Shoulders", "Arms"],
+  LowerBody: ["Core", "Legs"],
+  FullBody: ["Chest", "Back", "Shoulders", "Arms", "Core", "Legs", "Cardio"],
+};
+
 async function fetchByTarget(target) {
   const r = await fetch(
     `${BASE}/exercises/target/${encodeURIComponent(target)}`,
-    {
-      headers: headers(),
-    }
+    { headers: headers() }
   );
   const data = await r.json();
   if (!r.ok) throw new Error(data?.message || `Failed target ${target}`);
@@ -86,9 +87,7 @@ router.get("/exercise/:id", async (req, res) => {
     const { id } = req.params;
     const r = await fetch(
       `${BASE}/exercises/exercise/${encodeURIComponent(id)}`,
-      {
-        headers: headers(),
-      }
+      { headers: headers() }
     );
     const data = await r.json();
     if (!r.ok)
@@ -112,9 +111,7 @@ router.get("/target/:muscle", async (req, res) => {
   try {
     const r = await fetch(
       `${BASE}/exercises/target/${encodeURIComponent(muscle)}`,
-      {
-        headers: headers(),
-      }
+      { headers: headers() }
     );
     const allRaw = await r.json();
     if (!r.ok)
@@ -122,7 +119,7 @@ router.get("/target/:muscle", async (req, res) => {
         .status(r.status)
         .json({ error: allRaw?.message || "Failed to fetch exercises" });
 
-    const all = (Array.isArray(allRaw) ? allRaw : []).map(withGif); // ✅ normalize
+    const all = (Array.isArray(allRaw) ? allRaw : []).map(withGif);
     const slice = all.slice(offset, offset + limit);
     res.json({ total: all.length, limit, offset, results: slice });
   } catch (e) {
@@ -137,9 +134,7 @@ router.get("/plans/:muscle", async (req, res) => {
   try {
     const r = await fetch(
       `${BASE}/exercises/target/${encodeURIComponent(muscle)}`,
-      {
-        headers: headers(),
-      }
+      { headers: headers() }
     );
     const raw = await r.json();
     if (!r.ok)
@@ -147,7 +142,7 @@ router.get("/plans/:muscle", async (req, res) => {
         .status(r.status)
         .json({ error: raw?.message || "Failed to fetch exercises" });
 
-    const exercises = (Array.isArray(raw) ? raw : []).map(withGif); // ✅ normalize
+    const exercises = (Array.isArray(raw) ? raw : []).map(withGif);
     const shuffled = shuffle(exercises);
     const pick = (arr, n) => arr.slice(0, n);
     const day1 = pick(shuffled, 4);
@@ -189,7 +184,7 @@ router.get("/group/:group", async (req, res) => {
   const offset = parseInt(req.query.offset || "0", 10);
 
   try {
-    const lists = await Promise.all(targets.map((t) => fetchByTarget(t))); // ✅ already normalized
+    const lists = await Promise.all(targets.map((t) => fetchByTarget(t)));
     const merged = lists.flat();
     const seen = new Set();
     const dedup = merged.filter((ex) => {
@@ -228,7 +223,7 @@ router.get("/plans/group/:group", async (req, res) => {
   const targets = entry[1];
 
   try {
-    const lists = await Promise.all(targets.map((t) => fetchByTarget(t))); // ✅ already normalized
+    const lists = await Promise.all(targets.map((t) => fetchByTarget(t)));
     const merged = shuffle(lists.flat());
 
     const day1 = merged.slice(0, 5);
@@ -247,6 +242,79 @@ router.get("/plans/group/:group", async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Server error building group plan" });
+  }
+});
+
+router.get("/areas", (_req, res) => {
+  res.json(Object.entries(AREAS).map(([area, groups]) => ({ area, groups })));
+});
+
+router.get("/area/:area", async (req, res) => {
+  const areaParam = (req.params.area || "").toLowerCase();
+  const entry = Object.entries(AREAS).find(
+    ([a]) => a.toLowerCase() === areaParam
+  );
+  if (!entry)
+    return res.status(404).json({ error: `Unknown area "${req.params.area}"` });
+
+  const areaName = entry[0];
+  const groups = entry[1];
+
+  const allTargets = groups.flatMap((g) => GROUPS[g] || []);
+  const limit = Math.min(parseInt(req.query.limit || "60", 10), 120);
+  const offset = parseInt(req.query.offset || "0", 10);
+
+  try {
+    const lists = await Promise.all(allTargets.map((t) => fetchByTarget(t)));
+    const merged = lists.flat();
+    const seen = new Set();
+    const dedup = merged.filter((ex) => {
+      const key = ex.id || ex.name;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const total = dedup.length;
+    const slice = dedup.slice(offset, offset + limit);
+    res.json({ area: areaName, groups, total, limit, offset, results: slice });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error fetching area" });
+  }
+});
+
+router.get("/plans/area/:area", async (req, res) => {
+  const areaParam = (req.params.area || "").toLowerCase();
+  const entry = Object.entries(AREAS).find(
+    ([a]) => a.toLowerCase() === areaParam
+  );
+  if (!entry)
+    return res.status(404).json({ error: `Unknown area "${req.params.area}"` });
+
+  const areaName = entry[0];
+  const groups = entry[1];
+  const allTargets = groups.flatMap((g) => GROUPS[g] || []);
+
+  try {
+    const lists = await Promise.all(allTargets.map((t) => fetchByTarget(t)));
+    const merged = shuffle(lists.flat());
+
+    const day1 = merged.slice(0, 6);
+    const day2 = merged.slice(6, 12);
+    const day3 = merged.slice(12, 18);
+
+    res.json({
+      area: areaName,
+      groups,
+      days: [
+        buildDay("Day 1", day1, areaName),
+        buildDay("Day 2", day2, areaName),
+        buildDay("Day 3", day3, areaName),
+      ],
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Server error building area plan" });
   }
 });
 
