@@ -1,4 +1,3 @@
-// ai.routes.js (minimal, pinned to cerebras first)
 const express = require("express");
 const router = express.Router();
 
@@ -7,10 +6,9 @@ const doFetch =
   ((...args) => import("node-fetch").then(({ default: f }) => f(...args)));
 
 const HF_API_KEY = process.env.HUGGINGFACE_API_KEY || process.env.HF_API_KEY;
-const PREFERRED = process.env.HF_MODEL; // e.g. "meta-llama/Llama-3.1-8B-Instruct:cerebras"
+const PREFERRED = process.env.HF_MODEL;
 const ENDPOINT = "https://router.huggingface.co/v1/chat/completions";
 
-// Keep only providers that usually work; put the known-good one first
 const FALLBACKS = [
   "meta-llama/Llama-3.1-8B-Instruct:cerebras", // known good for you
   "mistralai/Mistral-7B-Instruct-v0.3:fireworks",
@@ -46,7 +44,6 @@ async function tryModel(body, model) {
 
   const raw = await res.text();
   if (!res.ok) {
-    // pass actionable hints up the chain
     let hint = "";
     if (res.status === 401) hint = " (check HF token + provider permissions)";
     if (res.status === 429)
@@ -87,10 +84,7 @@ router.post("/chat", async (req, res) => {
       top_p,
     };
 
-    const candidates = [
-      model || PREFERRED, // prefer client/env override
-      ...FALLBACKS,
-    ].filter(Boolean);
+    const candidates = [model || PREFERRED, ...FALLBACKS].filter(Boolean);
 
     let lastErr = null;
     for (const m of candidates) {

@@ -1,12 +1,8 @@
-// routes/exercises.routes.js
 const express = require("express");
 const router = express.Router();
 
 const BASE = "https://exercisedb.p.rapidapi.com";
 
-/* =========================
-   Config
-   ========================= */
 function headers() {
   if (!process.env.RAPIDAPI_KEY) throw new Error("Missing RAPIDAPI_KEY");
   return {
@@ -17,9 +13,6 @@ function headers() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* =========================
-   Helpers
-   ========================= */
 function withGif(ex) {
   const id = ex?.id || ex?.uuid || ex?.name;
   const fallback = id
@@ -54,13 +47,10 @@ async function safeFetch(url) {
   }
 }
 
-/** Map synonyms → ExerciseDB's exact target keys */
 const TARGET_ALIASES = Object.freeze({
-  // Chest
   "pectoralis major": "pectorals",
   pectorals: "pectorals",
 
-  // Back
   "latissimus dorsi": "lats",
   lats: "lats",
   "upper back": "upper back",
@@ -69,23 +59,19 @@ const TARGET_ALIASES = Object.freeze({
   spine: "spine",
   "levator scapulae": "levator scapulae",
 
-  // Shoulders
   deltoids: "delts",
   delts: "delts",
 
-  // Arms
   "biceps brachii": "biceps",
   biceps: "biceps",
   "triceps brachii": "triceps",
   triceps: "triceps",
   forearms: "forearms",
 
-  // Core
   abdominals: "abs",
   abs: "abs",
   obliques: "obliques",
 
-  // Legs
   quadriceps: "quads",
   quads: "quads",
   hamstrings: "hamstrings",
@@ -94,7 +80,6 @@ const TARGET_ALIASES = Object.freeze({
   adductors: "adductors",
   abductors: "abductors",
 
-  // Cardio
   "cardiovascular system": "cardiovascular system",
 });
 
@@ -115,7 +100,7 @@ async function fetchTargets(targets) {
     const url = `${BASE}/exercises/target/${encodeURIComponent(normalized)}`;
     const data = await safeFetch(url);
     results.push(...data);
-    await sleep(250); // throttle to avoid rate limits
+    await sleep(250);
   }
   return dedup(results);
 }
@@ -155,7 +140,6 @@ function buildDay(name, list, label, vol) {
   };
 }
 
-/** Distribute exercises across days, balanced by target (round-robin) and capped per day */
 function buildBalancedDays(exercises, { days = 3, perDay = 6 } = {}) {
   const buckets = exercises.reduce((acc, ex) => {
     const key = (ex.target || "other").toLowerCase();
@@ -171,7 +155,6 @@ function buildBalancedDays(exercises, { days = 3, perDay = 6 } = {}) {
     for (const key of [...bucketKeys]) {
       const ex = buckets[key].pop();
       if (ex) {
-        // place into next day with capacity
         let placed = false;
         for (let d = 0; d < days; d++) {
           if (result[d].length < perDay) {
@@ -180,7 +163,7 @@ function buildBalancedDays(exercises, { days = 3, perDay = 6 } = {}) {
             break;
           }
         }
-        if (!placed) return result; // all days full
+        if (!placed) return result;
       } else {
         const idx = bucketKeys.indexOf(key);
         if (idx >= 0) bucketKeys.splice(idx, 1);
@@ -190,9 +173,6 @@ function buildBalancedDays(exercises, { days = 3, perDay = 6 } = {}) {
   return result;
 }
 
-/* =========================
-   Groups & Areas (ExerciseDB keys)
-   ========================= */
 const GROUPS = {
   Chest: ["pectorals", "serratus anterior"],
   Back: ["lats", "upper back", "traps", "spine", "levator scapulae"],
@@ -209,11 +189,6 @@ const AREAS = {
   FullBody: ["Chest", "Back", "Shoulders", "Arms", "Core", "Legs", "Cardio"],
 };
 
-/* =========================
-   Routes
-   ========================= */
-
-// Health check
 router.get("/health", async (_req, res) => {
   try {
     const r = await fetch(`${BASE}/exercises/targetList`, {
@@ -229,14 +204,12 @@ router.get("/health", async (_req, res) => {
   }
 });
 
-// List groups
 router.get("/groups", (_req, res) => {
   res.json(
     Object.entries(GROUPS).map(([group, targets]) => ({ group, targets }))
   );
 });
 
-// Exercises for a group
 router.get("/group/:group", async (req, res) => {
   const groupParam = (req.params.group || "").toLowerCase();
   const entry = Object.entries(GROUPS).find(
@@ -268,7 +241,6 @@ router.get("/group/:group", async (req, res) => {
   }
 });
 
-// 3-day (configurable) plan for a group
 router.get("/plans/group/:group", async (req, res) => {
   const groupParam = (req.params.group || "").toLowerCase();
   const entry = Object.entries(GROUPS).find(
@@ -316,12 +288,10 @@ router.get("/plans/group/:group", async (req, res) => {
   }
 });
 
-// List areas
 router.get("/areas", (_req, res) => {
   res.json(Object.entries(AREAS).map(([area, groups]) => ({ area, groups })));
 });
 
-// Exercises for an area
 router.get("/area/:area", async (req, res) => {
   const areaParam = (req.params.area || "").toLowerCase();
   const entry = Object.entries(AREAS).find(
@@ -352,7 +322,6 @@ router.get("/area/:area", async (req, res) => {
   }
 });
 
-// 3-day (configurable) plan for an area
 router.get("/plans/area/:area", async (req, res) => {
   const areaParam = (req.params.area || "").toLowerCase();
   const entry = Object.entries(AREAS).find(
@@ -402,7 +371,6 @@ router.get("/plans/area/:area", async (req, res) => {
   }
 });
 
-// Single exercise by ID
 router.get("/exercise/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -424,7 +392,6 @@ router.get("/exercise/:id", async (req, res) => {
   }
 });
 
-// Passthrough: target list
 router.get("/targets", async (_req, res) => {
   try {
     const r = await fetch(`${BASE}/exercises/targetList`, {
@@ -442,7 +409,6 @@ router.get("/targets", async (_req, res) => {
   }
 });
 
-// Passthrough: exercises by target
 router.get("/target/:muscle", async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || "20", 10), 50);
   const offset = parseInt(req.query.offset || "0", 10);
