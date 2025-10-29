@@ -105,7 +105,6 @@ async function fetchTargets(targets) {
   return dedup(results);
 }
 
-/* -------- Volume & plan building -------- */
 function getVolume(req) {
   const intensity = String(req.query.intensity || "standard").toLowerCase();
   const presets = {

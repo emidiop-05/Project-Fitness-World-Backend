@@ -10,7 +10,7 @@ const PREFERRED = process.env.HF_MODEL;
 const ENDPOINT = "https://router.huggingface.co/v1/chat/completions";
 
 const FALLBACKS = [
-  "meta-llama/Llama-3.1-8B-Instruct:cerebras", // known good for you
+  "meta-llama/Llama-3.1-8B-Instruct:cerebras", 
   "mistralai/Mistral-7B-Instruct-v0.3:fireworks",
   "Qwen/Qwen2.5-7B-Instruct:together",
 ];
